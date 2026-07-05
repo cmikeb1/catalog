@@ -110,6 +110,33 @@ def test_search_cli_emits_compact_results(tmp_path, monkeypatch, capsys):
     assert "## Active Epics" not in json.dumps(results)
 
 
+def test_stats_cli_emits_json(tmp_path, monkeypatch, capsys):
+    root = copy_fixture(tmp_path)
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(sys, "argv", ["catalog", "stats", "--format", "json"])
+
+    main()
+
+    stats = json.loads(capsys.readouterr().out)
+    assert stats["corpus_root"] == str(root.resolve())
+    assert stats["total_file_count"] > 0
+    assert stats["catalog_visible_source_count"] == 14
+
+
+def test_health_cli_emits_json(tmp_path, monkeypatch, capsys):
+    root = copy_fixture(tmp_path)
+    large_file = root / "large.bin"
+    large_file.write_bytes(b"x" * (10 * 1024 * 1024 + 1))
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(sys, "argv", ["catalog", "health", "--format", "json"])
+
+    main()
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["corpus_root"] == str(root.resolve())
+    assert any(issue["code"] == "health-large-local-file" for issue in report["issues"])
+
+
 def test_search_cli_sees_epic_local_reference(tmp_path, monkeypatch, capsys):
     root = copy_fixture(tmp_path)
     monkeypatch.chdir(root)

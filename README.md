@@ -91,6 +91,8 @@ From the corpus root:
 catalog init
 catalog index
 catalog status
+catalog stats
+catalog health
 catalog mounts
 ```
 
@@ -129,6 +131,45 @@ catalog validate --root ../../.. --format json
 catalog validate --corpus corpus://cmikeb/work/brief --format json
 ```
 
+Stats and local health:
+
+```bash
+catalog stats --root ../../..
+catalog stats --root ../../.. --format json --top 25
+catalog health --root ../../..
+catalog health --root ../../.. --format json --write-report --fail-on error
+```
+
+`stats` reports local corpus file counts, bytes, Markdown versus
+non-Markdown balance, Catalog-visible source count, top extensions, top
+directories, largest files, `.corpusignore` coverage, Git-tracked status
+when available, and package-like `projects/*/code/*` directories with
+obvious identity markers such as `README.md`, `pyproject.toml`,
+`package.json`, `Cargo.toml`, and `go.mod`.
+
+`health` is an operational node check, separate from `validate`.
+`validate` answers whether source corpus content conforms to the current
+CORPUS-SPEC rules. `health` answers whether the local mount, derived
+data, search scope, large files, generated directories, and surrounding
+tooling are healthy for this node. By default it is read-only: it does
+not move files, edit `.corpusignore`, alter Git history, or clean build
+output.
+
+Health checks include:
+
+- large Git-tracked files against the Git-light policy;
+- large local files;
+- heavy directories by byte or file count;
+- generated/dependency/cache directories that may deserve
+  `.corpusignore` rules;
+- package-like source directories that should usually be ignored until a
+  deliberate software-project summary interface exists;
+- migration suggestions when registered mounts advertise storage roles.
+
+First-pass Git-light thresholds are 1 MiB warning and 10 MiB error.
+Mount registry entries may override these with
+`large_file_warn_bytes` and `large_file_error_bytes`.
+
 Release metadata:
 
 ```bash
@@ -150,6 +191,24 @@ catalog mounts --no-register
 default, records the current mount in the per-user registry at
 `~/.corpus/mounts.json`. Set `CORPUS_HOME` to place that registry
 somewhere else for tests or isolated runs.
+
+Registry entries may carry optional placement metadata. Catalog
+preserves these hand-edited fields when re-registering a mount and uses
+them for health suggestions only:
+
+```json
+{
+  "storage_role": "git-light",
+  "intent": "Portable Markdown-first BRIEF corpus for broad device access.",
+  "preferred_for": ["markdown", "small-docs", "source-of-truth"],
+  "avoid_for": ["large-binaries", "media", "build-output"],
+  "large_file_warn_bytes": 1048576,
+  "large_file_error_bytes": 10485760
+}
+```
+
+Suggested storage roles are `git-light`, `cloud-docs`, and
+`bulk-media`.
 
 `status` reports whether the current mount is already registered and
 suggests `catalog mounts --root <root>` when the local registry has not
@@ -192,6 +251,10 @@ MVP artifacts:
   issue export;
 - `.corpus/reports/validation.md` — human validation receipt;
 - `.corpus/jobs/last-run.json` — last indexing receipt;
+- `.corpus/reports/health.md` — optional human health receipt from
+  `catalog health --write-report`;
+- `.corpus/jobs/last-health.json` — optional machine-readable health
+  receipt from `catalog health --write-report`;
 - `.corpus/embeddings/` — reserved for future vector artifacts.
 
 Source files remain canonical. Catalog excludes `.corpus/` from corpus

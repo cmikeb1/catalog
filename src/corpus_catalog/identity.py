@@ -26,6 +26,14 @@ CORPUS_URI_RE = re.compile(
 )
 CORPUS_HOME_ENV = "CORPUS_HOME"
 REGISTRY_FILENAME = "mounts.json"
+PLACEMENT_FIELDS = (
+    "storage_role",
+    "intent",
+    "preferred_for",
+    "avoid_for",
+    "large_file_warn_bytes",
+    "large_file_error_bytes",
+)
 
 
 class CorpusIdentityError(ValueError):
@@ -234,8 +242,13 @@ def register_mount(
         )
         updated = True
     elif existing.root_path != mount.root_path or existing.last_seen_at != now:
+        payload = mount.model_dump(mode="json")
+        for field in PLACEMENT_FIELDS:
+            value = getattr(existing, field)
+            if value not in (None, []):
+                payload[field] = value
         by_uri[mount.mount_uri] = KnownCorpusMount(
-            **mount.model_dump(mode="json"),
+            **payload,
             registered_at=existing.registered_at,
             last_seen_at=now,
         )

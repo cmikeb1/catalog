@@ -8,6 +8,11 @@ import sys
 from corpus_catalog.config import CatalogConfig
 from corpus_catalog.context import build_context_packet
 from corpus_catalog.corpus import load_corpus, search_corpus
+from corpus_catalog.health import (
+    build_corpus_stats,
+    build_health_report,
+    write_health_artifacts,
+)
 from corpus_catalog.identity import (
     CorpusIdentityError,
     build_mount_inventory,
@@ -42,6 +47,27 @@ def main() -> None:
     status_parser = subparsers.add_parser("status")
     add_root_argument(status_parser)
     status_parser.add_argument("--format", choices=("text", "json"), default="text")
+
+    stats_parser = subparsers.add_parser("stats")
+    add_root_argument(stats_parser)
+    stats_parser.add_argument("--format", choices=("text", "json"), default="text")
+    stats_parser.add_argument("--top", type=int, default=20)
+
+    health_parser = subparsers.add_parser("health")
+    add_root_argument(health_parser)
+    health_parser.add_argument("--format", choices=("text", "json"), default="text")
+    health_parser.add_argument("--top", type=int, default=20)
+    health_parser.add_argument(
+        "--write-report",
+        action="store_true",
+        help="Write .corpus/reports/health.md and .corpus/jobs/last-health.json.",
+    )
+    health_parser.add_argument(
+        "--fail-on",
+        choices=("error", "warning", "never"),
+        default="never",
+        help="Exit nonzero when health findings meet this severity.",
+    )
 
     context_parser = subparsers.add_parser("context")
     add_root_argument(context_parser)
@@ -122,6 +148,22 @@ def main() -> None:
             print(status.model_dump_json(indent=2))
         else:
             print(format_status(status))
+    elif args.command == "stats":
+        stats = build_corpus_stats(config, top=args.top)
+        if args.format == "json":
+            print(stats.model_dump_json(indent=2))
+        else:
+            print(format_stats(stats))
+    elif args.command == "health":
+        report = build_health_report(config, top=args.top)
+        if args.write_report:
+            write_health_artifacts(config, report)
+        if args.format == "json":
+            print(report.model_dump_json(indent=2))
+        else:
+            print(format_health(report))
+        if health_should_fail(report, args.fail_on):
+            raise SystemExit(1)
     elif args.command == "context":
         ensure_identity_selection(config, args.corpus, args.mount, parser)
         packet = build_context_packet(goal=args.goal, cwd=args.cwd, config=config)
@@ -317,6 +359,151 @@ def format_status(status: CatalogStatus) -> str:
         lines.append("Next commands:")
         lines.extend(f"- {command}" for command in status.next_commands)
     return "\n".join(lines)
+
+
+def format_stats(stats) -> str:
+    lines = [
+        "Catalog stats",
+        f"Generated: {stats.generated_at}",
+        f"Corpus root: {stats.corpus_root}",
+    ]
+    if stats.current_mount:
+        lines.extend(
+            [
+                f"Corpus URI: {stats.current_mount.corpus_uri}",
+                f"Mount URI: {stats.current_mount.mount_uri}",
+                f"Sync transport: {stats.current_mount.sync_transport or 'unknown'}",
+            ]
+        )
+    if stats.registered_mount:
+        role = stats.registered_mount.storage_role or "unspecified"
+        lines.append(f"Mount storage role: {role}")
+        if stats.registered_mount.intent:
+            lines.append(f"Mount intent: {stats.registered_mount.intent}")
+    lines.extend(
+        [
+            f"Files: {stats.total_file_count} ({format_bytes(stats.total_bytes)})",
+            (
+                "Markdown: "
+                f"{stats.markdown_file_count} ({format_bytes(stats.markdown_bytes)})"
+            ),
+            (
+                "Non-Markdown: "
+                f"{stats.non_markdown_file_count} "
+                f"({format_bytes(stats.non_markdown_bytes)})"
+            ),
+            f"Catalog-visible sources: {stats.catalog_visible_source_count}",
+            (
+                ".corpusignore-covered files: "
+                f"{stats.corpusignored_file_count} "
+                f"({format_bytes(stats.corpusignored_bytes)})"
+            ),
+            f"Git available: {'yes' if stats.git_available else 'no'}",
+        ]
+    )
+    if stats.git_tracked_file_count is not None:
+        lines.append(
+            "Git-tracked files: "
+            f"{stats.git_tracked_file_count} "
+            f"({format_bytes(stats.git_tracked_bytes or 0)})"
+        )
+    if stats.corpusignore_patterns:
+        lines.append(".corpusignore patterns:")
+        lines.extend(f"- {pattern}" for pattern in stats.corpusignore_patterns)
+    if stats.largest_files:
+        lines.append("Largest files:")
+        lines.extend(
+            f"- {format_bytes(file.size_bytes)} {file.path}"
+            f"{tracked_suffix(file.tracked_by_git)}"
+            for file in stats.largest_files
+        )
+    if stats.largest_directories:
+        lines.append("Largest directories:")
+        lines.extend(
+            f"- {format_bytes(directory.size_bytes)} "
+            f"{directory.path} ({directory.file_count} files)"
+            for directory in stats.largest_directories
+        )
+    if stats.extensions:
+        lines.append("Top extensions:")
+        lines.extend(
+            f"- {extension.extension}: {extension.file_count} files, "
+            f"{format_bytes(extension.size_bytes)}"
+            for extension in stats.extensions
+        )
+    if stats.source_code_directories:
+        lines.append("Source code directories:")
+        for directory in stats.source_code_directories:
+            details = []
+            if directory.markers:
+                details.append("markers: " + ", ".join(directory.markers))
+            if directory.readme_path:
+                details.append(f"readme: {directory.readme_path}")
+            ignored = "ignored" if directory.ignored_by_corpusignore else "visible"
+            suffix = f" ({'; '.join(details)})" if details else ""
+            lines.append(
+                f"- {directory.path}: {format_bytes(directory.size_bytes)}, "
+                f"{directory.file_count} files, {ignored}{suffix}"
+            )
+    return "\n".join(lines)
+
+
+def format_health(report) -> str:
+    lines = [
+        "Catalog health",
+        f"Generated: {report.generated_at}",
+        f"Corpus root: {report.corpus_root}",
+        f"Issue count: {len(report.issues)}",
+    ]
+    if not report.issues:
+        lines.append("No health issues found.")
+        return "\n".join(lines)
+
+    lines.append("Issues:")
+    for issue in report.issues:
+        path = f" {issue.path}" if issue.path else ""
+        size = f" [{format_bytes(issue.size_bytes)}]" if issue.size_bytes else ""
+        lines.append(
+            f"- {issue.severity.upper()} {issue.code}{path}{size}: "
+            f"{issue.message}"
+        )
+        if issue.recommendation:
+            lines.append(f"  Recommendation: {issue.recommendation}")
+        if issue.suggested_mounts:
+            targets = ", ".join(mount.mount_uri for mount in issue.suggested_mounts)
+            lines.append(f"  Suggested mounts: {targets}")
+    return "\n".join(lines)
+
+
+def format_bytes(size_bytes: int | None) -> str:
+    if size_bytes is None:
+        return "unknown"
+    value = float(size_bytes)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024 or unit == "TiB":
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} TiB"
+
+
+def tracked_suffix(tracked_by_git: bool | None) -> str:
+    if tracked_by_git is True:
+        return " [tracked]"
+    if tracked_by_git is False:
+        return " [local]"
+    return " [git unknown]"
+
+
+def health_should_fail(report, fail_on: str) -> bool:
+    if fail_on == "never":
+        return False
+    if fail_on == "error":
+        return any(issue.severity == "error" for issue in report.issues)
+    if fail_on == "warning":
+        return any(issue.severity in {"error", "warning"} for issue in report.issues)
+    return False
 
 
 def format_mount_inventory(inventory: MountInventory) -> str:

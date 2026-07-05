@@ -175,6 +175,12 @@ class CorpusMount(BaseModel):
     sync_transport: str | None = None
     root_path: str
     aliases: list[str] = Field(default_factory=list)
+    storage_role: str | None = None
+    intent: str | None = None
+    preferred_for: list[str] = Field(default_factory=list)
+    avoid_for: list[str] = Field(default_factory=list)
+    large_file_warn_bytes: int | None = Field(default=None, ge=0)
+    large_file_error_bytes: int | None = Field(default=None, ge=0)
 
 
 class KnownCorpusMount(CorpusMount):
@@ -210,6 +216,131 @@ class MountInventory(BaseModel):
     known_mounts: list[KnownCorpusMount] = Field(default_factory=list)
     registry_updated: bool = False
     sync_status: MountSyncStatus | None = None
+
+
+class FileStat(BaseModel):
+    """One scanned local file in a corpus root."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    size_bytes: int = Field(ge=0)
+    extension: str
+    is_markdown: bool = False
+    tracked_by_git: bool | None = None
+    ignored_by_corpusignore: bool = False
+    catalog_visible: bool = False
+
+
+class DirectoryStat(BaseModel):
+    """Aggregated local directory size/count data."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    size_bytes: int = Field(ge=0)
+    file_count: int = Field(ge=0)
+    markdown_file_count: int = Field(default=0, ge=0)
+    catalog_visible_file_count: int = Field(default=0, ge=0)
+    ignored_file_count: int = Field(default=0, ge=0)
+    ignored_bytes: int = Field(default=0, ge=0)
+    ignored_by_corpusignore: bool = False
+
+
+class ExtensionStat(BaseModel):
+    """Aggregated local file-extension size/count data."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    extension: str
+    file_count: int = Field(ge=0)
+    size_bytes: int = Field(ge=0)
+
+
+class SourceCodeDirectoryStat(BaseModel):
+    """Package-like code directory surfaced for corpus-health review."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    size_bytes: int = Field(ge=0)
+    file_count: int = Field(ge=0)
+    markdown_file_count: int = Field(default=0, ge=0)
+    catalog_visible_file_count: int = Field(default=0, ge=0)
+    ignored_by_corpusignore: bool = False
+    markers: list[str] = Field(default_factory=list)
+    readme_path: str | None = None
+
+
+class CorpusStats(BaseModel):
+    """Corpus-local filesystem/search/sync observability report."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    generated_at: str
+    corpus_root: str
+    current_mount: CorpusMount | None = None
+    registered_mount: KnownCorpusMount | None = None
+    git_available: bool = False
+    corpusignore_patterns: list[str] = Field(default_factory=list)
+    total_file_count: int = Field(ge=0)
+    total_bytes: int = Field(ge=0)
+    markdown_file_count: int = Field(ge=0)
+    markdown_bytes: int = Field(ge=0)
+    non_markdown_file_count: int = Field(ge=0)
+    non_markdown_bytes: int = Field(ge=0)
+    catalog_visible_source_count: int = Field(ge=0)
+    corpusignored_file_count: int = Field(ge=0)
+    corpusignored_bytes: int = Field(ge=0)
+    git_tracked_file_count: int | None = None
+    git_tracked_bytes: int | None = None
+    largest_files: list[FileStat] = Field(default_factory=list)
+    largest_directories: list[DirectoryStat] = Field(default_factory=list)
+    extensions: list[ExtensionStat] = Field(default_factory=list)
+    source_code_directories: list[SourceCodeDirectoryStat] = Field(
+        default_factory=list
+    )
+
+
+class MountSuggestion(BaseModel):
+    """Registered mount that may be a better home for a health finding."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mount_uri: str
+    root_path: str
+    storage_role: str | None = None
+    intent: str | None = None
+
+
+class HealthIssue(BaseModel):
+    """Operational corpus-host health finding."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    severity: Severity
+    message: str
+    path: str | None = None
+    size_bytes: int | None = Field(default=None, ge=0)
+    file_count: int | None = Field(default=None, ge=0)
+    tracked_by_git: bool | None = None
+    confidence: str | None = None
+    recommendation: str | None = None
+    suggested_mounts: list[MountSuggestion] = Field(default_factory=list)
+
+
+class HealthReport(BaseModel):
+    """Read-only local node/tooling health report."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    generated_at: str
+    corpus_root: str
+    stats: CorpusStats
+    issues: list[HealthIssue] = Field(default_factory=list)
 
 
 class CatalogArtifact(BaseModel):

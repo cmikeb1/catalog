@@ -57,6 +57,8 @@ Catalog does not own:
 - `catalog init`
 - `catalog index`
 - `catalog status`
+- `catalog stats`
+- `catalog health`
 - `catalog context`
 - `catalog search`
 - `catalog validate`
